@@ -1,7 +1,13 @@
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import {
+  Link,
+  redirect,
+  useNavigate,
+  useParams,
+  useSubmit,
+  useNavigation,
+} from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { fetchEvent, updateEvent } from "../../utils/http.js";
-import LoadingIndicator from "../UI/LoadingIndicator.jsx";
 import ErrorBlock from "../UI/ErrorBlock.jsx";
 import Modal from "../UI/Modal.jsx";
 import EventForm from "./EventForm.jsx";
@@ -10,33 +16,35 @@ import { client } from "../../utils/http.js";
 
 export default function EditEvent() {
   const navigate = useNavigate();
+  const { state } = useNavigation();
   const { id } = useParams();
-  const { data, isPending, isError, error } = useQuery({
+  const submit = useSubmit();
+  const { data, isError, error } = useQuery({
     queryKey: ["event", { id }],
     queryFn: ({ signal }) => fetchEvent({ id, signal }),
+    staleTime: 10000,
   });
 
-  const { mutate } = useMutation({
-    mutationFn: updateEvent,
-    onMutate: async (data) => {
-      await client.cancelQueries({ queryKey: ["event", { id }] });
+  // const { mutate } = useMutation({
+  //   mutationFn: updateEvent,
+  //   onMutate: async (data) => {
+  //     await client.cancelQueries({ queryKey: ["event", { id }] });
 
-      const previousEvent = client.getQueryData(["event", { id }]);
-      client.setQueryData(["event", { id }], data.event);
+  //     const previousEvent = client.getQueryData(["event", { id }]);
+  //     client.setQueryData(["event", { id }], data.event);
 
-      return { previousEvent }; //will be a context below
-    },
-    onError: (error, data, context) => {
-      client.setQueryData(["event", { id }], context.previousEvent);
-    },
-    onSettled: () => {
-      client.invalidateQueries(["event", { id }]);
-    },
-  });
+  //     return { previousEvent }; //will be a context below
+  //   },
+  //   onError: (error, data, context) => {
+  //     client.setQueryData(["event", { id }], context.previousEvent);
+  //   },
+  //   onSettled: () => {
+  //     client.invalidateQueries(["event", { id }]);
+  //   },
+  // }); OPTIMISTIC UPDATE
 
   function handleSubmit(formData) {
-    mutate({ id, event: formData });
-    navigate("../");
+    submit(formData, { method: "PUT" });
   }
 
   function handleClose() {
@@ -44,10 +52,6 @@ export default function EditEvent() {
   }
 
   let content;
-
-  if (isPending) {
-    content = <LoadingIndicator />;
-  }
 
   if (isError) {
     content = (
@@ -71,15 +75,36 @@ export default function EditEvent() {
   if (data) {
     content = (
       <EventForm inputData={data} onSubmit={handleSubmit}>
-        <Link to="../" className="button-text">
-          Cancel
-        </Link>
-        <button type="submit" className="button">
-          Update
-        </button>
+        {state === "submitting" ? (
+          <p>Sending data...</p>
+        ) : (
+          <>
+            <Link to="../" className="button-text">
+              Cancel
+            </Link>
+            <button type="submit" className="button">
+              Update
+            </button>
+          </>
+        )}
       </EventForm>
     );
   }
 
   return <Modal onClose={handleClose}>{content}</Modal>;
+}
+
+export function loader({ params }) {
+  return client.fetchQuery({
+    queryKey: ["event", params.id],
+    queryFn: ({ signal }) => fetchEvent({ signal, id: params.id }),
+  });
+}
+
+export async function action({ request, params }) {
+  const formData = await request.formData();
+  const updatedEventData = Object.fromEntries(formData);
+  await updateEvent({ id: params.id, event: updatedEventData });
+  await client.invalidateQueries(["events"]);
+  return redirect("../");
 }
